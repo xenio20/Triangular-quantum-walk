@@ -1,0 +1,388 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue May  7 09:58:58 2019
+  
+@author: Admin
+"""
+  
+number = 1000    #nombre d'opérations
+E = 1           #step unitaire
+  
+debut = 140  #set la dimension de départ du réseau
+fin = 150   #set la dimension de fin du réseau
+pas = 10    #set l'inccrément du nombre de point du réseau
+  
+  
+import numpy as np
+import pylab as pl
+import scipy as sc
+import scipy.linalg
+import scipy.optimize as optimization
+from scipy.signal import savgol_filter
+from scipy.signal import find_peaks
+  
+import time
+  
+start_time = time.time()
+  
+  
+"-----------------------------------------------------------------------------"
+"--------------------------HADAMARD GATE--------------------------------------"
+      
+H = np.ndarray( shape=(2,2) )
+H[0][0]=1/np.sqrt(2)
+H[1][1]=1/np.sqrt(2)    
+H[1][0]=1/np.sqrt(2)
+H[1][1]=-1/np.sqrt(2)
+      
+  
+"-----------------------------------------------------------------------------"
+"---------------------------- W OPERATOR -------------------------------------"
+      
+masse=1
+pi_0 = np.ndarray( shape=(2,2) )
+pi_1 = np.ndarray( shape=(2,2) )
+pi_2 = np.ndarray( shape=(2,2) )
+sigma_y = np.ndarray( shape=(2,2) , dtype=complex )
+sigma_z = np.ndarray( shape=(2,2) , dtype=complex )
+      
+      
+###############################################################################
+######################## TRIANGLE DIRECTIONS ##################################
+      
+pi_0[0]=1
+pi_0[1]=0
+  
+      
+pi_1[0]=-1/2
+pi_1[1]=np.sqrt(3)/2
+      
+pi_2[0]=-1/2
+pi_2[1]=-np.sqrt(3)/2
+      
+      
+###############################################################################
+######################## PAULI MATRICES #######################################    
+      
+sigma_z[0][0]=1
+sigma_z[0][1]=0
+sigma_z[1][0]=0
+sigma_z[1][1]=-1
+      
+sigma_y[0][0]=0
+sigma_y[0][1]=1j
+sigma_y[1][0]=-1j
+sigma_y[1][1]=0
+      
+      
+###############################################################################
+######################## W OPERATOR ###########################################  
+  
+alpha = np.arccos(np.sqrt(5)/3)
+  
+W_1 = np.dot ( sc.linalg.expm(1j*alpha*sigma_y/2) , sc.linalg.expm(-1j*E*3/np.sqrt(5)*masse*sigma_z) ) 
+  
+W_2 = np.dot ( np.exp(1j*np.pi/3) * sc.linalg.expm(-1j*np.pi/3*sigma_z) , W_1 )
+  
+W = np.dot ( sc.linalg.expm(-1j*alpha*sigma_y/2) , W_2 )
+  
+###############################################################################
+######################## W OPERATOR ###########################################  
+#R = np.zeros(shape=(2,2), dtype=complex)  
+#R[0,0] = np.exp(1j*np.pi/2)
+#R[1,0] = 0 
+#R[0,1] = 0  
+#R[1,1] = np.exp(-1j*np.pi/2)
+
+  
+"-----------------------------------------------------------------------------"
+"-----------------------------------------------------------------------------"
+  
+"-----------------------------------------------------------------------------"
+"------------------------- CORE PROGRAM --------------------------------------"
+  
+t_max = np.zeros(shape= (int((fin-debut)/pas)) )
+maximum_relatif = np.zeros(shape= (int((fin-debut)/pas)) )
+maximum = np.zeros(shape= (int((fin-debut)/pas)) )
+triangles = np.zeros(shape= (int((fin-debut)/pas)) ) 
+  
+for N in range(debut,fin,pas) :
+      
+    print(N)
+    indice = int((N-debut)/pas) 
+  
+    X = np.zeros (shape=(N,N))
+    Y = np.zeros (shape=(N,N))
+      
+         
+    "-----------------------------------------------------------------------------"
+    "----------------------------- LIST OF DEFECT --------------------------------"
+      
+    position_0 = []
+    position_1 = []
+    
+    default_down = int(N/2)   #position of the defect
+    default_up = int(N/2)
+    
+    list_defect_up = []     
+    list_defect_down = []
+    
+    
+    "----------------------------DOWN DEFECT------------------------------"        
+    list_defect_down.append( (default_down+1)*N + (default_down+2) )
+    list_defect_down.append( (default_down+2)*N + (default_down+2) )
+    list_defect_down.append( (default_down+2)*N + (default_down+3) )
+    
+    "------------------------------UP DEFECT------------------------------"        
+    
+    list_defect_up.append( (default_up)*N + (default_up) )
+    list_defect_up.append( (default_up+1)*N + (default_up) )
+    list_defect_up.append( (default_up)*N + (default_up-1) )
+
+      
+    "-----------------------------------------------------------------------------"
+    "----------------------------- MAILLAGE --------------------------------------"
+      
+    u_0 = np.array([1,0])
+    u_1 = np.array([np.cos(2/3*np.pi),np.sin(2/3*np.pi)])
+      
+    for i in range(N) :
+        for j in range(N) : 
+      
+            X[i,j] = (u_0[0]*i + u_1[0]*j)
+            Y[i,j] =  (u_0[1]*i + u_1[1]*j)
+
+
+    "-----------------------------------------------------------------------------"
+    "----------------------------- INITIAL STATE ---------------------------------"
+    temps = np.zeros(shape=(number), dtype='int64')
+    Norme = np.zeros(shape=(number))
+    state = np.zeros (shape=(2,N,N), dtype=np.clongdouble)
+    density = np.zeros(shape=(N,N), dtype=np.longdouble)
+    oscillation = np.ndarray(shape=(number), dtype=float)
+    
+    S = np.float64(0) 
+    for i in range(int(N/4),int(3*N/4)) : 
+        for j in range(int(N/4),int(3*N/4)) : 
+            
+            state[0,i,j] = 1/np.sqrt(2*(N/2)**2)
+            state[1,i,j] = 1/np.sqrt(2*(N/2)**2)
+            
+            if i*N+j in list_defect_down :
+                state[0,i,j] = 1/np.sqrt((N/2)**2)
+                state[1,i,j] = 0
+                
+            if i*N+j in list_defect_up :
+                state[0,i,j] = 0
+                state[1,i,j] = 1/np.sqrt((N/2)**2)     
+    
+            density[i,j] = np.abs(state[0,i,j])**2 + np.abs(state[1,i,j])**2
+
+    "-----------------------------------------------------------------------------"
+    "----------------------------SHIFT OF E---------------------------------------" 
+      
+    for step in range(number) : 
+          
+        tampon = np.array (state)
+          
+        for i in range(N) : 
+            for j in range(N) :
+              
+                if (i%2 ==0 and j%2 ==0) :
+                      
+                    "--------------- FIRST TRANSLATION --------------"    
+                    state[0, (i+1)%N, j] =  tampon [0, i, j]                   
+                    state[1, (i-1)%N, j] =  tampon [1, i, j]
+          
+                           
+                if (i%2 !=0 and j%2 ==0) :
+                      
+                    "--------------- SECOND TRANSLATION --------------"  
+                    state[0, i, (j+1)%N] =  tampon [0, i, j]
+                    state[1, i, (j-1)%N] =  tampon [1, i, j]
+      
+                      
+                if (i%2 !=0 and j%2 !=0) :
+                      
+                    "--------------- THIRD TRANSLATION --------------"    
+                    state[0, (i-1)%N, (j-1)%N] =  tampon [0, i, j]              
+                    state[1, (i+1)%N, (j+1)%N] =  tampon [1, i, j]
+                      
+      
+                      
+        tampon = np.array (state)           
+          
+      
+      
+    ###############################################################################
+    ########################### APPLY W OR I ######################################            
+                  
+        for i in range(N) : 
+            for j in range(N) :    
+                  
+                  
+                if (i*N+j in (list_defect_up or list_defect_down)) :
+                      
+#                    state[0, i, j] =  R[0,0]*tampon[0 , i, j] + R[0,1]*tampon[1, i, j]  
+#                    state[1, i, j] =  R[1,0]*tampon[0 , i, j] + R[1,1]*tampon[1, i, j]
+#                    state[0, i, j] = sigma_z[0,0]*tampon[0, i, j] + sigma_z[0,1]*tampon[1,i,j]
+#                    state[1, i, j] = sigma_z[1,0]*tampon[1, i, j] + sigma_z[1,1]*tampon[1,i,j]
+                    state[0, i, j] = tampon[0, i, j]
+                    state[1, i, j] = tampon[1,i,j]
+                    
+                  
+                else : 
+      
+                    state[0, i, j] = W[0,0]*tampon[0 , i, j] + W[0,1]*tampon[1, i, j]  
+                    state[1, i, j] = W[1,0]*tampon[0 , i, j] + W[1,1]*tampon[1, i, j]
+                      
+                                   
+    ###############################################################################
+    ######################## NORMALISATION ########################################
+      
+        S = 0
+        for i in range(N) : 
+            for j in range(N) : 
+      
+                density[i,j] = np.abs(state[0,i,j])**2 + np.abs(state[1,i,j])**2
+       
+      
+        i = int((list_defect_up[2] - list_defect_up[2]%N )/N)
+        j = int(list_defect_up[2]%N) 
+          
+          
+      
+        a= np.sum(density[ (i-3):(i+2) , (j-2) ])
+        b= np.sum(density[ (i-3):(i+3) , (j-1) ])
+        c= np.sum(density[ (i-3):(i+4) , (j) ])
+        d= np.sum(density[ (i-3):(i+5) , (j+1) ])
+        e= np.sum(density[ (i-3):(i+6) , (j+2) ]) 
+        f= np.sum(density[ (i-2):(i+6) , (j+3) ])
+        g= np.sum(density[ (i-1):(i+6) , (j+4) ])
+        h= np.sum(density[ (i):(i+6) , (j+5) ])
+        i= np.sum(density[ (i+1):(i+6) , (j+6) ])    
+         
+         
+        oscillation[step] = a+b+c+d+e+f+g+h+i
+        temps[step] = step
+         
+ 
+    "-----------------------------------------------------------------------------"
+    "----------------------------- AVERAGING---- ---------------------------------"       
+    moy = 0
+    for k in range(N) : 
+        for l in range(N) : 
+            if ( (k not in range(int(i-3),int(i+2)) and l!=int(j-2)) or\
+                (k not in range(int(i-3),int(i+3)) and l!=int(j-1)) or\
+                (k not in range(int(i-3),int(i+4)) and l!=int(j)) or\
+                (k not in range(int(i-3),int(i+5)) and l!=int(j+1)) or\
+                (k not in range(int(i-3),int(i+6)) and l!=int(j+2)) or\
+                (k not in range(int(i-2),int(i+6)) and l!=int(j+3)) or\
+                (k not in range(int(i-1),int(i+6)) and l!=int(j+4)) or\
+                (k not in range(int(i),int(i+6)) and l!=int(j+5)) or\
+                (k not in range(int(i+1),int(i+6) and l!=int(j+6))) ) :
+                    moy = moy + density[k,l]/(N**2-72)
+     
+    
+    #np.savetxt('/Users/Admin/Desktop/stages/programmes/data_oscillation/Oscillation_N'+str(N)+'.txt', oscillation) 
+    oscillation = savgol_filter(oscillation,51,4)
+    triangles[indice]= 1/3*N**2
+    peaks, _ = find_peaks(oscillation, width=5)
+    t_max[indice] = temps[peaks[1]]   
+#    maximum_relatif[indice] = (np.max(oscillation)-moy)/moy
+    maximum_relatif[indice] = np.abs(np.max(oscillation)-(1/N))/(1/N)
+    maximum[indice] = np.max(oscillation)
+#    oscillation = (oscillation-moy)/moy
+    oscillation = np.abs(oscillation-1/N)/(1/N)
+    
+ 
+  
+    
+    pl.figure(1)
+    pl.plot(temps, oscillation)
+    pl.xlabel("time (nbr of steps)")
+    pl.ylabel("relative probability")
+    pl.title("Evolution of the probability in a hexagon around the defect")
+    pl.grid()
+#    pl.savefig('C:/Users/Admin/Desktop/stages/programmes/image_m=1/oscillation_boule_relative_2N'+str(N)+'.png', dpi=300)
+    pl.show()
+
+#np.savetxt('/Users/Admin/Desktop/stages/programmes/oscillation_div/temps.txt', temps) 
+#np.savetxt('/Users/Admin/Desktop/stages/programmes/oscillation_div/m=1.txt', oscillation) 
+#np.savetxt('/Users/Admin/Desktop/stages/programmes/t_max_m=1/Oscillation_2N.txt', t_max) 
+#np.savetxt('/Users/Admin/Desktop/stages/programmes/data_hexagone/m=0.9.txt', maximum_relatif) 
+#np.savetxt('/Users/Admin/Desktop/stages/programmes/t_max_m=1/triangles.txt', triangles)  
+print(oscillation.max)
+print(t_max)
+  
+"-----------------------------------------------------------------------------"
+"----------------------------CURVE FITTING------------------------------------" 
+      
+def func(x, a, b, c ):
+    return a + b*x**c
+
+def func_inverse(x,a,b,c) :
+    return a + b/x +c/x**2
+
+def func_lin_1(x,a,b):
+    return a/x + b
+def func_lin_2(x,a,b):
+    return a/x + b
+    
+popt_0, pcov_0 = optimization.curve_fit(func_inverse,triangles,maximum)
+popt, pcov = optimization.curve_fit(func,triangles,t_max)
+popt_1, pcov_1 = optimization.curve_fit(func,triangles,maximum_relatif)
+popt_2,pcov_2 = optimization.curve_fit(func_lin_1,triangles[0:6],maximum[0:6])
+popt_3,pcov_3 = optimization.curve_fit(func_lin_2,triangles[7:15],maximum[7:15])
+
+
+  
+pl.figure(1)
+pl.plot(triangles, maximum_relatif/triangles,'+', label='data')
+#pl.plot(triangles, func(triangles, *popt_1), label='fit: %5.5f + %5.3f*x + %5.3f*x²' % tuple(popt_1))
+pl.xlabel("number of triangles")
+pl.ylabel("Relative deviation")
+pl.title("Relative deviation on the defect w.r.t number of triangles")
+pl.legend(loc='upper right')
+pl.grid()
+#pl.savefig('C:/Users/Admin/Desktop/stages/programmes/image_m=0/P=f(N)_relatif_2N.png', dpi=500)
+pl.show()
+
+pl.figure(3)
+pl.plot(triangles, maximum, '+', label='data')
+#pl.plot(triangles, func_inverse(triangles, *popt_0), label='fit: %5.3f + %5.3f/x + %5.3f/x² ' % tuple(popt_0))
+pl.xlabel("number of triangles")
+pl.ylabel("Maximum probabilty")
+pl.title("Maximum probability on the defect w.r.t number of triangles")
+pl.legend(loc='upper right')
+pl.grid()
+#pl.savefig('C:/Users/Admin/Desktop/stages/programmes/image_2N/P=f(N)_2N.png', dpi=500)
+pl.show()
+ 
+pl.figure(2)
+pl.plot(triangles, t_max, '+', label='data')
+pl.plot(triangles, np.pi/4*np.sqrt(triangles), label='theoretical Grover')
+#pl.plot(triangles, func(triangles, *popt), label='fit: %5.3f + %5.3f*x**(0.5) ' % tuple(popt))
+pl.xlabel("number of triangles")
+pl.ylabel("Time (nbr of steps)")
+pl.title("Maximal time w.r.t number of triangles")
+pl.legend(loc='upper right')
+pl.grid()
+#pl.savefig('C:/Users/Admin/Desktop/stages/programmes/image_m=1/Max_time_relatif_2N.png', dpi=500)
+pl.show()
+
+pl.figure(4)
+pl.loglog((triangles), (maximum), '+', label='data')
+pl.loglog((triangles)[0:6], func_lin_1(triangles, *popt_2)[0:6], label='fit: %5.3f/x +%5.3f' % tuple(popt_2))
+pl.loglog((triangles)[6:15],func_lin_2(triangles,*popt_3)[6:15], label='fit: %5.3f/x +%5.3f ' % tuple(popt_3))
+pl.xlabel("number of triangles")
+pl.ylabel("Time (nbr of steps)")
+pl.title("Relative deviation w.r.t number of triangles")
+pl.legend(loc='upper right')
+pl.grid()
+#pl.savefig('C:/Users/Admin/Desktop/stages/programmes/image_2N/P=f(N)_lin.png', dpi=500)
+pl.show()
+
+#np.savetxt('/Users/Admin/Desktop/stages/programmes/P=f(N).txt', np.transpose([triangles,maximum]))   
+  
+print("Temps d execution : %s secondes ---" % (time.time() - start_time))
